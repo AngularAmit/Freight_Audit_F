@@ -18,6 +18,7 @@ This project contains the Angular 21 version of the Freight Audit application wi
 - Dashboard with user account and permission summary
 - Admin user and permission management screens
 - Carrier onboarding workflow with document and compliance steps
+- Audit Upload page for uploading audit documents against approved carriers
 - Invoice upload, list, detail, and workflow actions
 - Master data screens for contracts and rates
 - Reports module with summary, performance, and penalty views
@@ -61,6 +62,7 @@ src/
       dashboard/                      # DashboardComponent
       admin/                          # users, roles, permission matrix
       carriers/                       # carrier list and onboarding wizard
+      audit-upload/                   # approved-carrier audit document upload
       invoices/                       # upload, list, detail, workflow dialog
       masters/                        # contracts and rates
       reports/                        # summary, performance, penalties
@@ -216,6 +218,7 @@ fa.auth.user
 /carriers
 /carriers/new
 /carriers/:id
+/audit-upload
 /masters
 /transactions
 /reports

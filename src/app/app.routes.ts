@@ -62,6 +62,12 @@ export const routes: Routes = [
         ]
       },
       {
+        path: 'audit-upload',
+        loadComponent: () =>
+          import('./features/audit-upload/audit-upload.component').then((m) => m.AuditUploadComponent),
+        data: { title: 'Audit Upload', subtitle: 'Upload and maintain carrier audit documents' }
+      },
+      {
         path: 'masters',
         canActivate: [permissionGuard('MASTER')],
         loadComponent: () =>

@@ -15,7 +15,7 @@ interface SidebarItem {
   badge?: string;
 }
 
-type IconKey = 'home' | 'shield' | 'truck' | 'database' | 'invoice' | 'reports' | 'ai';
+type IconKey = 'home' | 'shield' | 'truck' | 'upload' | 'database' | 'invoice' | 'reports' | 'ai';
 
 /**
  * Static catalogue of the supported sidebar items. The sidebar renders
@@ -26,6 +26,7 @@ const SIDEBAR_CATALOGUE: SidebarItem[] = [
   { label: 'Dashboard',          route: '/dashboard',    iconKey: 'home',     alwaysVisible: true },
   { label: 'Admin',              route: '/admin',        iconKey: 'shield',   moduleCode: 'ADMIN' },
   { label: 'Carrier Onboarding', route: '/carriers',     iconKey: 'truck',    moduleCode: 'CARRIER' },
+  { label: 'Audit Upload',       route: '/audit-upload', iconKey: 'upload',   alwaysVisible: true },
   { label: 'Master',             route: '/masters',      iconKey: 'database', moduleCode: 'MASTER' },
   { label: 'Transactions',       route: '/transactions', iconKey: 'invoice',  moduleCode: 'TRANSACTION' },
   { label: 'Reports',            route: '/reports',      iconKey: 'reports',  moduleCode: 'REPORT' }
@@ -212,6 +213,8 @@ export class SidebarComponent {
         return `<svg width="18" height="18" viewBox="0 0 24 24" ${base}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>`;
       case 'truck':
         return `<svg width="18" height="18" viewBox="0 0 24 24" ${base}><rect x="1" y="6" width="13" height="11" rx="2"/><path d="M14 9h4l3 4v4h-7"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="19" r="2"/></svg>`;
+      case 'upload':
+        return `<svg width="18" height="18" viewBox="0 0 24 24" ${base}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
       case 'database':
         return `<svg width="18" height="18" viewBox="0 0 24 24" ${base}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6"/></svg>`;
       case 'invoice':
