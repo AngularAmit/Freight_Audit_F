@@ -10,10 +10,11 @@ import { CarrierService } from '../carriers/carrier.service';
 import { CarrierSummary } from '../carriers/models/carrier.model';
 
 import { AuditUploadService } from './audit-upload.service';
-import { AuditUploadResponse } from './models/audit-upload.model';
+import { AuditType, AuditUploadResponse } from './models/audit-upload.model';
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx', '.xls', '.xlsx']);
+const AUDIT_TYPES: readonly AuditType[] = ['Contracts', 'Invoice'];
 
 @Component({
   selector: 'app-audit-upload',
@@ -44,7 +45,7 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
         <header class="card-head">
           <div>
             <h2>{{ editingUpload() ? 'Edit upload' : 'Upload documents' }}</h2>
-            <p>Select an approved carrier name as the document type, then choose the audit file.</p>
+            <p>Select an approved carrier name and audit type, then choose the audit file.</p>
           </div>
 
           @if (editingUpload()) {
@@ -67,11 +68,21 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
 
         <div class="upload-grid">
           <label class="field">
-            <span class="lbl">Document Type</span>
+            <span class="lbl">Carrier Name</span>
             <select [(ngModel)]="selectedCarrierId" name="documentType" [disabled]="loadingCarriers()">
               <option value="">Select approved carrier</option>
               @for (carrier of approvedCarriers(); track carrier.id) {
                 <option [value]="carrier.id">{{ carrier.name }}</option>
+              }
+            </select>
+          </label>
+
+          <label class="field">
+            <span class="lbl">Audit Type</span>
+            <select [(ngModel)]="selectedAuditType" name="auditType">
+              <option value="">Select audit type</option>
+              @for (type of auditTypes; track type) {
+                <option [value]="type">{{ type }}</option>
               }
             </select>
           </label>
@@ -145,6 +156,7 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
             <thead>
               <tr>
                 <th>Company</th>
+                <th>Audit type</th>
                 <th>Contract title</th>
                 <th>Effective date</th>
                 <th>Parties</th>
@@ -156,18 +168,19 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
             </thead>
             <tbody>
               @if (loadingUploads()) {
-                <tr><td colspan="8" class="state-row">Loading uploaded documents...</td></tr>
+                <tr><td colspan="9" class="state-row">Loading uploaded documents...</td></tr>
               } @else if (uploads().length === 0) {
                 <tr>
-                  <td colspan="8" class="state-row state-empty">
+                  <td colspan="9" class="state-row state-empty">
                     <strong>No audit documents uploaded yet.</strong>
-                    <span>Select an approved carrier and upload a document to get started.</span>
+                    <span>Select an approved carrier, audit type and upload a document to get started.</span>
                   </td>
                 </tr>
               } @else {
                 @for (doc of uploads(); track doc.ID) {
                   <tr>
                     <td><strong>{{ doc.Company }}</strong></td>
+                    <td><span class="type-pill">{{ doc.AuditType ?? resolveAuditType(doc) }}</span></td>
                     <td>{{ doc.ContracTtitle }}</td>
                     <td class="muted">{{ doc.EffectiveDate | date: 'mediumDate' }}</td>
                     <td>{{ doc.Parties }}</td>
@@ -323,7 +336,7 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
 
     .upload-grid {
       display: grid;
-      grid-template-columns: 280px 1fr;
+      grid-template-columns: 240px 200px 1fr;
       gap: 16px;
       padding: 20px;
       align-items: stretch;
@@ -478,6 +491,19 @@ const ALLOWED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.d
       font-weight: 700;
       text-transform: uppercase;
     }
+    .type-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--color-primary-50);
+      color: var(--color-primary-700);
+      border: 1px solid var(--color-primary-100);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
     .status-pill {
       display: inline-flex;
       align-items: center;
@@ -547,8 +573,10 @@ export class AuditUploadComponent implements OnInit {
   readonly loadingUploads = signal(false);
   readonly saving = signal(false);
   readonly editingUpload = signal<AuditUploadResponse | null>(null);
+  readonly auditTypes = AUDIT_TYPES;
 
   selectedCarrierId = '';
+  selectedAuditType: AuditType | '' = '';
 
   ngOnInit(): void {
     this.loadApprovedCarriers();
@@ -585,8 +613,9 @@ export class AuditUploadComponent implements OnInit {
 
   submitUpload(): void {
     const carrier = this.selectedCarrier();
-    if (!carrier) {
-      this.toast.error('Please select the Carrier Name');
+    const auditType = this.selectedAuditType;
+    if (!carrier || !auditType) {
+      this.toast.error('Please select the Carrier Name and Type ');
       return;
     }
 
@@ -599,14 +628,14 @@ export class AuditUploadComponent implements OnInit {
 
     this.saving.set(true);
     const save$ = editing
-      ? this.auditUploads.update(editing, carrier, file)
-      : this.auditUploads.upload(carrier, file!);
+      ? this.auditUploads.update(editing, carrier, auditType, file)
+      : this.auditUploads.upload(carrier, auditType, file!);
 
     save$
       .pipe(finalize(() => this.saving.set(false)))
       .subscribe({
         next: (upload) => {
-          this.upsertUpload(upload);
+          this.upsertUpload(upload, editing?.ID);
           this.toast.success(editing ? 'Audit document updated.' : 'Audit document uploaded.');
           this.resetForm();
         },
@@ -628,6 +657,7 @@ export class AuditUploadComponent implements OnInit {
     }
 
     this.selectedCarrierId = carrier.id;
+    this.selectedAuditType = this.resolveAuditType(upload);
     this.selectedFile.set(null);
     this.editingUpload.set(upload);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -676,6 +706,13 @@ export class AuditUploadComponent implements OnInit {
     return i >= 0 ? name.slice(i + 1).toUpperCase() : '';
   }
 
+  resolveAuditType(upload: AuditUploadResponse): AuditType {
+    if (upload.AuditType) return upload.AuditType;
+    if (upload.Terms === 'Invoice' || upload.Terms === 'Contracts') return upload.Terms;
+    if (upload.ContracTtitle.toLowerCase().includes('invoice')) return 'Invoice';
+    return 'Contracts';
+  }
+
   private selectedCarrier(): CarrierSummary | null {
     return this.approvedCarriers().find((carrier) => carrier.id === this.selectedCarrierId) ?? null;
   }
@@ -698,16 +735,18 @@ export class AuditUploadComponent implements OnInit {
     return null;
   }
 
-  private upsertUpload(upload: AuditUploadResponse): void {
-    this.uploads.update((items) =>
-      items.some((item) => item.ID === upload.ID)
-        ? items.map((item) => (item.ID === upload.ID ? upload : item))
-        : [upload, ...items]
-    );
+  private upsertUpload(upload: AuditUploadResponse, replaceId?: string): void {
+    this.uploads.update((items) => {
+      const withoutOld = replaceId ? items.filter((item) => item.ID !== replaceId) : items;
+      return withoutOld.some((item) => item.ID === upload.ID)
+        ? withoutOld.map((item) => (item.ID === upload.ID ? upload : item))
+        : [upload, ...withoutOld];
+    });
   }
 
   private resetForm(): void {
     this.selectedCarrierId = '';
+    this.selectedAuditType = '';
     this.selectedFile.set(null);
     this.editingUpload.set(null);
   }

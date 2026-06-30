@@ -1,5 +1,8 @@
+export type AuditType = 'Contracts' | 'Invoice';
+
 export interface AuditUploadRequest {
   id: string;
+  auditType: AuditType;
   documentType: string;
   fileName: string;
   filePath: string;
@@ -16,4 +19,5 @@ export interface AuditUploadResponse {
   Terms: string;
   FileName: string;
   IsActive: boolean;
+  AuditType?: AuditType;
 }

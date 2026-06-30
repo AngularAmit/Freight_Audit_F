@@ -1,13 +1,15 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable, of, throwError } from 'rxjs';
-import { catchError, map, tap } from 'rxjs/operators';
+import { catchError, map, switchMap, tap } from 'rxjs/operators';
 
 import { environment } from '../../../environments/environment';
 import { ApiResponse } from '../../core/auth/models/api-response.model';
 import { CarrierSummary } from '../carriers/models/carrier.model';
+import { ContractResponse } from '../masters/models/contract.model';
+import { InvoiceResponse } from '../invoices/models/invoice.model';
 
-import { AuditUploadRequest, AuditUploadResponse } from './models/audit-upload.model';
+import { AuditType, AuditUploadRequest, AuditUploadResponse } from './models/audit-upload.model';
 
 type AuditUploadListResponse =
   | ApiResponse<AuditUploadResponse[]>
@@ -24,7 +26,7 @@ export class AuditUploadService {
     return this.http
       .get<AuditUploadListResponse>(`${this.base}/api/audit-uploads`)
       .pipe(
-        map((res) => this.unwrapList(res)),
+        map((res) => this.unwrapList(res).map((item) => this.normalizeUpload(item))),
         tap((items) => this.writeLocal(items)),
         catchError((err: HttpErrorResponse) => {
           if (err.status === 401) return throwError(() => err);
@@ -33,46 +35,33 @@ export class AuditUploadService {
       );
   }
 
-  upload(carrier: CarrierSummary, file: File): Observable<AuditUploadResponse> {
-    const request = this.buildRequest(carrier, file);
+  upload(carrier: CarrierSummary, auditType: AuditType, file: File): Observable<AuditUploadResponse> {
+    const request = this.buildRequest(carrier, auditType, file);
     const fallback = this.toResponse(request, carrier.name);
 
-    return this.http
-      .post<ApiResponse<AuditUploadResponse>>(`${this.base}/api/audit-uploads`, request)
-      .pipe(
-        map((res) => res.data ?? fallback),
-        tap((upload) => this.upsertLocal(upload)),
-        catchError((err: HttpErrorResponse) => {
-          if (err.status === 401) return throwError(() => err);
-          this.upsertLocal(fallback);
-          return of(fallback);
-        })
-      );
+    return this.persistByType(carrier, request, file, fallback);
   }
 
   update(
     current: AuditUploadResponse,
     carrier: CarrierSummary,
+    auditType: AuditType,
     file: File | null
   ): Observable<AuditUploadResponse> {
-    const request = this.buildRequest(carrier, file, current);
+    const request = this.buildRequest(carrier, auditType, file, current);
     const fallback = this.toResponse(request, carrier.name, current);
 
-    return this.http
-      .put<ApiResponse<AuditUploadResponse>>(`${this.base}/api/audit-uploads/${current.ID}`, request)
-      .pipe(
-        map((res) => res.data ?? fallback),
-        tap((upload) => this.upsertLocal(upload)),
-        catchError((err: HttpErrorResponse) => {
-          if (err.status === 401) return throwError(() => err);
-          this.upsertLocal(fallback);
-          return of(fallback);
-        })
-      );
+    if (!file) {
+      this.upsertLocal(fallback);
+      return of(fallback);
+    }
+
+    return this.persistByType(carrier, request, file, fallback);
   }
 
   private buildRequest(
     carrier: CarrierSummary,
+    auditType: AuditType,
     file: File | null,
     current?: AuditUploadResponse
   ): AuditUploadRequest {
@@ -81,6 +70,7 @@ export class AuditUploadService {
 
     return {
       id: current?.ID ?? this.createId(),
+      auditType,
       documentType: carrier.name,
       fileName,
       filePath: file ? this.buildFilePath(carrier.id, file.name) : current?.FileName ?? '',
@@ -97,13 +87,128 @@ export class AuditUploadService {
     return {
       ID: request.id,
       Company: carrierName,
-      ContracTtitle: current?.ContracTtitle ?? `${carrierName} audit upload`,
+      ContracTtitle: current?.ContracTtitle ?? `${carrierName} ${request.auditType.toLowerCase()} audit`,
       EffectiveDate: request.createdAt,
       Parties: current?.Parties ?? carrierName,
-      Terms: request.status,
+      Terms: request.auditType,
       FileName: request.fileName,
-      IsActive: request.status.toLowerCase() !== 'inactive'
+      IsActive: request.status.toLowerCase() !== 'inactive',
+      AuditType: request.auditType
     };
+  }
+
+  private persistByType(
+    carrier: CarrierSummary,
+    request: AuditUploadRequest,
+    file: File,
+    fallback: AuditUploadResponse
+  ): Observable<AuditUploadResponse> {
+    const save$ = request.auditType === 'Contracts'
+      ? this.saveContractAudit(carrier, request)
+      : this.saveInvoiceAudit(carrier, request, file);
+
+    return save$.pipe(
+      tap((upload) => this.upsertLocal(upload)),
+      catchError((err: HttpErrorResponse) => {
+        if (err.status === 401) return throwError(() => err);
+        this.upsertLocal(fallback);
+        return of(fallback);
+      })
+    );
+  }
+
+  private saveContractAudit(
+    carrier: CarrierSummary,
+    request: AuditUploadRequest
+  ): Observable<AuditUploadResponse> {
+    const contractName = request.fileName || `${carrier.name} audit contract`;
+
+    return this.http
+      .post<ApiResponse<ContractResponse>>(`${this.base}/api/contracts`, {
+        carrierId: carrier.id,
+        contractName,
+        isActive: true
+      })
+      .pipe(
+        switchMap((created) => {
+          const contract = created.data;
+          if (!contract) return of(this.toResponse(request, carrier.name));
+
+          return this.http
+            .post<ApiResponse<ContractResponse>>(`${this.base}/api/contracts/${contract.id}/upload`, {
+              filePath: request.filePath
+            })
+            .pipe(map((uploaded) => this.fromContract(uploaded.data ?? contract, request, carrier.name)));
+        })
+      );
+  }
+
+  private saveInvoiceAudit(
+    carrier: CarrierSummary,
+    request: AuditUploadRequest,
+    file: File
+  ): Observable<AuditUploadResponse> {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    fd.append('carrierId', carrier.id);
+    fd.append('source', 'UPLOAD');
+    fd.append('actualAmount', '0');
+    fd.append('origin', 'Audit Upload');
+    fd.append('destination', 'Audit Upload');
+    fd.append('serviceType', 'Audit Upload');
+
+    return this.http
+      .post<ApiResponse<InvoiceResponse>>(`${this.base}/api/invoices/upload`, fd)
+      .pipe(map((res) => this.fromInvoice(res.data, request, carrier.name)));
+  }
+
+  private fromContract(
+    contract: ContractResponse,
+    request: AuditUploadRequest,
+    carrierName: string
+  ): AuditUploadResponse {
+    return {
+      ID: contract.id,
+      Company: contract.carrierName || carrierName,
+      ContracTtitle: contract.contractName,
+      EffectiveDate: contract.createdAt,
+      Parties: contract.carrierName || carrierName,
+      Terms: 'Contracts',
+      FileName: request.fileName,
+      IsActive: contract.isActive,
+      AuditType: 'Contracts'
+    };
+  }
+
+  private fromInvoice(
+    invoice: InvoiceResponse | undefined,
+    request: AuditUploadRequest,
+    carrierName: string
+  ): AuditUploadResponse {
+    return {
+      ID: invoice?.id ?? request.id,
+      Company: invoice?.carrierName || carrierName,
+      ContracTtitle: `${carrierName} invoice audit`,
+      EffectiveDate: invoice?.createdAt ?? request.createdAt,
+      Parties: invoice?.carrierName || carrierName,
+      Terms: 'Invoice',
+      FileName: request.fileName,
+      IsActive: true,
+      AuditType: 'Invoice'
+    };
+  }
+
+  private normalizeUpload(upload: AuditUploadResponse): AuditUploadResponse {
+    return {
+      ...upload,
+      AuditType: upload.AuditType ?? this.inferAuditType(upload)
+    };
+  }
+
+  private inferAuditType(upload: AuditUploadResponse): AuditType {
+    if (upload.Terms === 'Invoice' || upload.Terms === 'Contracts') return upload.Terms;
+    if (upload.ContracTtitle.toLowerCase().includes('invoice')) return 'Invoice';
+    return 'Contracts';
   }
 
   private unwrapList(res: AuditUploadListResponse): AuditUploadResponse[] {
