@@ -8,6 +8,8 @@ import { ApiResponse } from '../../core/auth/models/api-response.model';
 import { ToastService } from '../../shared/services/toast.service';
 import { CarrierService } from '../carriers/carrier.service';
 import { CarrierSummary } from '../carriers/models/carrier.model';
+import { MasterService } from '../masters/master.service';
+import { ContractListItem } from '../masters/models/contract.model';
 
 import { AuditUploadService } from './audit-upload.service';
 import { AuditType, AuditUploadResponse } from './models/audit-upload.model';
@@ -66,10 +68,14 @@ const AUDIT_TYPES: readonly AuditType[] = ['Contracts', 'Invoice'];
           </div>
         }
 
-        <div class="upload-grid">
+        <div class="upload-grid" [class.has-contract]="showContractName()">
           <label class="field">
             <span class="lbl">Carrier Name</span>
-            <select [(ngModel)]="selectedCarrierId" name="documentType" [disabled]="loadingCarriers()">
+            <select
+              [(ngModel)]="selectedCarrierId"
+              name="documentType"
+              [disabled]="loadingCarriers()"
+              (ngModelChange)="onCarrierChange($event)">
               <option value="">Select approved carrier</option>
               @for (carrier of approvedCarriers(); track carrier.id) {
                 <option [value]="carrier.id">{{ carrier.name }}</option>
@@ -79,13 +85,25 @@ const AUDIT_TYPES: readonly AuditType[] = ['Contracts', 'Invoice'];
 
           <label class="field">
             <span class="lbl">Audit Type</span>
-            <select [(ngModel)]="selectedAuditType" name="auditType">
+            <select [(ngModel)]="selectedAuditType" name="auditType" (ngModelChange)="onAuditTypeChange($event)">
               <option value="">Select audit type</option>
               @for (type of auditTypes; track type) {
                 <option [value]="type">{{ type }}</option>
               }
             </select>
           </label>
+
+          @if (showContractName()) {
+            <label class="field">
+              <span class="lbl">Contract Name</span>
+              <select [(ngModel)]="selectedContractId" name="contractName" [disabled]="loadingContracts()">
+                <option value="">{{ loadingContracts() ? 'Loading contracts...' : 'Select contract' }}</option>
+                @for (contract of carrierContracts(); track contract.id) {
+                  <option [value]="contract.id">{{ contract.contractName }}</option>
+                }
+              </select>
+            </label>
+          }
 
           <div class="dropzone"
                [class.is-dragover]="dragOver()"
@@ -341,6 +359,9 @@ const AUDIT_TYPES: readonly AuditType[] = ['Contracts', 'Invoice'];
       padding: 20px;
       align-items: stretch;
     }
+    .upload-grid.has-contract {
+      grid-template-columns: 220px 170px 240px 1fr;
+    }
     .field {
       display: flex;
       flex-direction: column;
@@ -562,14 +583,17 @@ const AUDIT_TYPES: readonly AuditType[] = ['Contracts', 'Invoice'];
 })
 export class AuditUploadComponent implements OnInit {
   private readonly carriers = inject(CarrierService);
+  private readonly masters = inject(MasterService);
   private readonly auditUploads = inject(AuditUploadService);
   private readonly toast = inject(ToastService);
 
   readonly approvedCarriers = signal<CarrierSummary[]>([]);
+  readonly carrierContracts = signal<ContractListItem[]>([]);
   readonly uploads = signal<AuditUploadResponse[]>([]);
   readonly selectedFile = signal<File | null>(null);
   readonly dragOver = signal(false);
   readonly loadingCarriers = signal(false);
+  readonly loadingContracts = signal(false);
   readonly loadingUploads = signal(false);
   readonly saving = signal(false);
   readonly editingUpload = signal<AuditUploadResponse | null>(null);
@@ -577,6 +601,7 @@ export class AuditUploadComponent implements OnInit {
 
   selectedCarrierId = '';
   selectedAuditType: AuditType | '' = '';
+  selectedContractId = '';
 
   ngOnInit(): void {
     this.loadApprovedCarriers();
@@ -611,11 +636,29 @@ export class AuditUploadComponent implements OnInit {
       });
   }
 
+  onCarrierChange(carrierId: string): void {
+    this.selectedCarrierId = carrierId;
+    this.selectedContractId = '';
+    this.loadContractsWhenNeeded();
+  }
+
+  onAuditTypeChange(auditType: AuditType | ''): void {
+    this.selectedAuditType = auditType;
+    this.selectedContractId = '';
+    this.loadContractsWhenNeeded();
+  }
+
   submitUpload(): void {
     const carrier = this.selectedCarrier();
     const auditType = this.selectedAuditType;
     if (!carrier || !auditType) {
       this.toast.error('Please select the Carrier Name and Type ');
+      return;
+    }
+
+    const contract = auditType === 'Invoice' ? this.selectedContract() : null;
+    if (auditType === 'Invoice' && !contract) {
+      this.toast.error('Please select the Contract Name');
       return;
     }
 
@@ -628,8 +671,8 @@ export class AuditUploadComponent implements OnInit {
 
     this.saving.set(true);
     const save$ = editing
-      ? this.auditUploads.update(editing, carrier, auditType, file)
-      : this.auditUploads.upload(carrier, auditType, file!);
+      ? this.auditUploads.update(editing, carrier, auditType, file, contract?.id, contract?.contractName)
+      : this.auditUploads.upload(carrier, auditType, file!, contract?.id, contract?.contractName);
 
     save$
       .pipe(finalize(() => this.saving.set(false)))
@@ -658,8 +701,10 @@ export class AuditUploadComponent implements OnInit {
 
     this.selectedCarrierId = carrier.id;
     this.selectedAuditType = this.resolveAuditType(upload);
+    this.selectedContractId = upload.ContractId ?? '';
     this.selectedFile.set(null);
     this.editingUpload.set(upload);
+    this.loadContractsWhenNeeded(upload.ContractId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -713,8 +758,41 @@ export class AuditUploadComponent implements OnInit {
     return 'Contracts';
   }
 
+  showContractName(): boolean {
+    return this.selectedAuditType === 'Invoice' && !!this.selectedCarrierId;
+  }
+
   private selectedCarrier(): CarrierSummary | null {
     return this.approvedCarriers().find((carrier) => carrier.id === this.selectedCarrierId) ?? null;
+  }
+
+  private selectedContract(): ContractListItem | null {
+    return this.carrierContracts().find((contract) => contract.id === this.selectedContractId) ?? null;
+  }
+
+  private loadContractsWhenNeeded(preselectId?: string | null): void {
+    if (!this.showContractName()) {
+      this.carrierContracts.set([]);
+      this.selectedContractId = '';
+      return;
+    }
+
+    this.loadingContracts.set(true);
+    this.masters
+      .listContracts({ page: 1, pageSize: 200, carrierId: this.selectedCarrierId })
+      .pipe(finalize(() => this.loadingContracts.set(false)))
+      .subscribe({
+        next: (page) => {
+          this.carrierContracts.set(page.items);
+          if (preselectId && page.items.some((contract) => contract.id === preselectId)) {
+            this.selectedContractId = preselectId;
+          }
+        },
+        error: (err: HttpErrorResponse) => {
+          const body = err.error as ApiResponse<unknown> | undefined;
+          this.toast.error(body?.message ?? 'Could not load contracts for selected carrier.');
+        }
+      });
   }
 
   private setFile(file: File): void {
@@ -747,6 +825,8 @@ export class AuditUploadComponent implements OnInit {
   private resetForm(): void {
     this.selectedCarrierId = '';
     this.selectedAuditType = '';
+    this.selectedContractId = '';
+    this.carrierContracts.set([]);
     this.selectedFile.set(null);
     this.editingUpload.set(null);
   }

@@ -35,8 +35,14 @@ export class AuditUploadService {
       );
   }
 
-  upload(carrier: CarrierSummary, auditType: AuditType, file: File): Observable<AuditUploadResponse> {
-    const request = this.buildRequest(carrier, auditType, file);
+  upload(
+    carrier: CarrierSummary,
+    auditType: AuditType,
+    file: File,
+    contractId?: string | null,
+    contractName?: string | null
+  ): Observable<AuditUploadResponse> {
+    const request = this.buildRequest(carrier, auditType, file, undefined, contractId, contractName);
     const fallback = this.toResponse(request, carrier.name);
 
     return this.persistByType(carrier, request, file, fallback);
@@ -46,9 +52,11 @@ export class AuditUploadService {
     current: AuditUploadResponse,
     carrier: CarrierSummary,
     auditType: AuditType,
-    file: File | null
+    file: File | null,
+    contractId?: string | null,
+    contractName?: string | null
   ): Observable<AuditUploadResponse> {
-    const request = this.buildRequest(carrier, auditType, file, current);
+    const request = this.buildRequest(carrier, auditType, file, current, contractId, contractName);
     const fallback = this.toResponse(request, carrier.name, current);
 
     if (!file) {
@@ -63,7 +71,9 @@ export class AuditUploadService {
     carrier: CarrierSummary,
     auditType: AuditType,
     file: File | null,
-    current?: AuditUploadResponse
+    current?: AuditUploadResponse,
+    contractId?: string | null,
+    contractName?: string | null
   ): AuditUploadRequest {
     const createdAt = current?.EffectiveDate ?? new Date().toISOString();
     const fileName = file?.name ?? current?.FileName ?? '';
@@ -71,6 +81,8 @@ export class AuditUploadService {
     return {
       id: current?.ID ?? this.createId(),
       auditType,
+      contractId: auditType === 'Invoice' ? (contractId ?? current?.ContractId ?? null) : null,
+      contractName: auditType === 'Invoice' ? (contractName ?? current?.ContracTtitle ?? null) : null,
       documentType: carrier.name,
       fileName,
       filePath: file ? this.buildFilePath(carrier.id, file.name) : current?.FileName ?? '',
@@ -87,13 +99,16 @@ export class AuditUploadService {
     return {
       ID: request.id,
       Company: carrierName,
-      ContracTtitle: current?.ContracTtitle ?? `${carrierName} ${request.auditType.toLowerCase()} audit`,
+      ContracTtitle: request.auditType === 'Invoice'
+        ? request.contractName ?? current?.ContracTtitle ?? `${carrierName} invoice audit`
+        : current?.ContracTtitle ?? `${carrierName} contract audit`,
       EffectiveDate: request.createdAt,
       Parties: current?.Parties ?? carrierName,
       Terms: request.auditType,
       FileName: request.fileName,
       IsActive: request.status.toLowerCase() !== 'inactive',
-      AuditType: request.auditType
+      AuditType: request.auditType,
+      ContractId: request.contractId ?? null
     };
   }
 
@@ -156,6 +171,9 @@ export class AuditUploadService {
     fd.append('origin', 'Audit Upload');
     fd.append('destination', 'Audit Upload');
     fd.append('serviceType', 'Audit Upload');
+    if (request.contractId) {
+      fd.append('contractId', request.contractId);
+    }
 
     return this.http
       .post<ApiResponse<InvoiceResponse>>(`${this.base}/api/invoices/upload`, fd)
@@ -176,7 +194,8 @@ export class AuditUploadService {
       Terms: 'Contracts',
       FileName: request.fileName,
       IsActive: contract.isActive,
-      AuditType: 'Contracts'
+      AuditType: 'Contracts',
+      ContractId: contract.id
     };
   }
 
@@ -188,13 +207,14 @@ export class AuditUploadService {
     return {
       ID: invoice?.id ?? request.id,
       Company: invoice?.carrierName || carrierName,
-      ContracTtitle: `${carrierName} invoice audit`,
+      ContracTtitle: request.contractName ?? `${carrierName} invoice audit`,
       EffectiveDate: invoice?.createdAt ?? request.createdAt,
       Parties: invoice?.carrierName || carrierName,
       Terms: 'Invoice',
       FileName: request.fileName,
       IsActive: true,
-      AuditType: 'Invoice'
+      AuditType: 'Invoice',
+      ContractId: request.contractId ?? null
     };
   }
 
