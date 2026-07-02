@@ -13,8 +13,7 @@ import {
   CreateSlaRuleDto,
   GetContractsQuery,
   SlaRule,
-  UpdateContractDto,
-  UploadContractFileDto
+  UpdateContractDto
 } from './models/contract.model';
 import {
   Accessorial,
@@ -62,22 +61,13 @@ export class MasterService {
       .pipe(map((r) => r.data!));
   }
 
-  /**
-   * POST /api/contracts/{id}/upload — register a contract PDF.
-   *
-   * Backend takes JSON metadata only ({ filePath }). Frontend builds a real
-   * FormData object from the picked file (so the picker UX is the File API
-   * end-to-end), then derives a deterministic filePath and POSTs JSON.
-   */
+  /** POST /api/contracts/{id}/upload — upload and register a contract file. */
   uploadContractFile(id: string, file: File): Observable<ContractResponse> {
     const formData = new FormData();
     formData.append('file', file, file.name);
 
-    const filePath = this.buildContractFilePath(id, file.name);
-    const dto: UploadContractFileDto = { filePath };
-
     return this.http
-      .post<ApiResponse<ContractResponse>>(`${this.base}/api/contracts/${id}/upload`, dto)
+      .post<ApiResponse<ContractResponse>>(`${this.base}/api/contracts/${id}/upload`, formData)
       .pipe(map((r) => r.data!));
   }
 
@@ -143,14 +133,6 @@ export class MasterService {
   }
 
   // ==================== INTERNAL ====================
-
-  private buildContractFilePath(contractId: string, fileName: string): string {
-    const safeName = fileName.replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const hasPdf = /\.pdf$/i.test(safeName);
-    const finalName = hasPdf ? safeName : `${safeName}.pdf`;
-    return `contracts/${contractId}/${stamp}-${finalName}`;
-  }
 
   private emptyContracts(): ContractPagedResponse {
     return { items: [], totalCount: 0, page: 1, pageSize: 20 };

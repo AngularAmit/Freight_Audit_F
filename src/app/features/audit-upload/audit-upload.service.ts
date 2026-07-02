@@ -1,20 +1,15 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Observable, of, throwError } from 'rxjs';
+import { forkJoin, Observable, of, throwError } from 'rxjs';
 import { catchError, map, switchMap, tap } from 'rxjs/operators';
 
 import { environment } from '../../../environments/environment';
 import { ApiResponse } from '../../core/auth/models/api-response.model';
 import { CarrierSummary } from '../carriers/models/carrier.model';
-import { ContractResponse } from '../masters/models/contract.model';
-import { InvoiceResponse } from '../invoices/models/invoice.model';
+import { ContractListItem, ContractPagedResponse, ContractResponse } from '../masters/models/contract.model';
+import { InvoicePagedResponse, InvoiceResponse } from '../invoices/models/invoice.model';
 
 import { AuditType, AuditUploadRequest, AuditUploadResponse } from './models/audit-upload.model';
-
-type AuditUploadListResponse =
-  | ApiResponse<AuditUploadResponse[]>
-  | AuditUploadResponse[]
-  | { data?: AuditUploadResponse[]; items?: AuditUploadResponse[] };
 
 @Injectable({ providedIn: 'root' })
 export class AuditUploadService {
@@ -23,10 +18,18 @@ export class AuditUploadService {
   private readonly storageKey = 'fa.audit.uploads';
 
   list(): Observable<AuditUploadResponse[]> {
-    return this.http
-      .get<AuditUploadListResponse>(`${this.base}/api/audit-uploads`)
-      .pipe(
-        map((res) => this.unwrapList(res).map((item) => this.normalizeUpload(item))),
+    return forkJoin({
+      contracts: this.http.get<ApiResponse<ContractPagedResponse>>(
+        `${this.base}/api/contracts?page=1&pageSize=200`
+      ),
+      invoices: this.http.get<ApiResponse<InvoicePagedResponse>>(
+        `${this.base}/api/invoices?page=1&pageSize=200`
+      )
+    }).pipe(
+        map(({ contracts, invoices }) => this.mergeUploads([
+          ...(contracts.data?.items ?? []).map((item) => this.fromContractList(item)),
+          ...(invoices.data?.items ?? []).map((item) => this.fromInvoiceList(item))
+        ], this.readLocal())),
         tap((items) => this.writeLocal(items)),
         catchError((err: HttpErrorResponse) => {
           if (err.status === 401) return throwError(() => err);
@@ -119,7 +122,7 @@ export class AuditUploadService {
     fallback: AuditUploadResponse
   ): Observable<AuditUploadResponse> {
     const save$ = request.auditType === 'Contracts'
-      ? this.saveContractAudit(carrier, request)
+      ? this.saveContractAudit(carrier, request, file)
       : this.saveInvoiceAudit(carrier, request, file);
 
     return save$.pipe(
@@ -134,7 +137,8 @@ export class AuditUploadService {
 
   private saveContractAudit(
     carrier: CarrierSummary,
-    request: AuditUploadRequest
+    request: AuditUploadRequest,
+    file: File
   ): Observable<AuditUploadResponse> {
     const contractName = request.fileName || `${carrier.name} audit contract`;
 
@@ -150,9 +154,10 @@ export class AuditUploadService {
           if (!contract) return of(this.toResponse(request, carrier.name));
 
           return this.http
-            .post<ApiResponse<ContractResponse>>(`${this.base}/api/contracts/${contract.id}/upload`, {
-              filePath: request.filePath
-            })
+            .post<ApiResponse<ContractResponse>>(
+              `${this.base}/api/contracts/${contract.id}/upload`,
+              this.buildContractFormData(file)
+            )
             .pipe(map((uploaded) => this.fromContract(uploaded.data ?? contract, request, carrier.name)));
         })
       );
@@ -167,7 +172,7 @@ export class AuditUploadService {
     fd.append('file', file, file.name);
     fd.append('carrierId', carrier.id);
     fd.append('source', 'UPLOAD');
-    fd.append('actualAmount', '0');
+    fd.append('actualAmount', '1');
     fd.append('origin', 'Audit Upload');
     fd.append('destination', 'Audit Upload');
     fd.append('serviceType', 'Audit Upload');
@@ -218,6 +223,36 @@ export class AuditUploadService {
     };
   }
 
+  private fromContractList(contract: ContractListItem): AuditUploadResponse {
+    return {
+      ID: contract.id,
+      Company: contract.carrierName,
+      ContracTtitle: contract.contractName,
+      EffectiveDate: contract.createdAt,
+      Parties: contract.carrierName,
+      Terms: 'Contracts',
+      FileName: this.fileNameFromPath(contract.filePath) || contract.contractName,
+      IsActive: contract.isActive,
+      AuditType: 'Contracts',
+      ContractId: contract.id
+    };
+  }
+
+  private fromInvoiceList(invoice: InvoiceResponse): AuditUploadResponse {
+    return {
+      ID: invoice.id,
+      Company: invoice.carrierName,
+      ContracTtitle: `${invoice.carrierName} invoice audit`,
+      EffectiveDate: invoice.createdAt,
+      Parties: invoice.carrierName,
+      Terms: 'Invoice',
+      FileName: this.fileNameFromPath(invoice.filePath) || `INV-${invoice.id.slice(0, 8)}`,
+      IsActive: true,
+      AuditType: 'Invoice',
+      ContractId: null
+    };
+  }
+
   private normalizeUpload(upload: AuditUploadResponse): AuditUploadResponse {
     return {
       ...upload,
@@ -231,16 +266,33 @@ export class AuditUploadService {
     return 'Contracts';
   }
 
-  private unwrapList(res: AuditUploadListResponse): AuditUploadResponse[] {
-    if (Array.isArray(res)) return res;
-    const shaped = res as { data?: AuditUploadResponse[]; items?: AuditUploadResponse[] };
-    return shaped.data ?? shaped.items ?? [];
-  }
-
   private buildFilePath(carrierId: string, fileName: string): string {
     const safeName = fileName.replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     return `audit-uploads/${carrierId}/${stamp}-${safeName}`;
+  }
+
+  private buildContractFormData(file: File): FormData {
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    return fd;
+  }
+
+  private fileNameFromPath(path: string | null | undefined): string {
+    if (!path) return '';
+    return path.split(/[\\/]/).filter(Boolean).pop() ?? '';
+  }
+
+  private mergeUploads(remote: AuditUploadResponse[], local: AuditUploadResponse[]): AuditUploadResponse[] {
+    const seen = new Set<string>();
+    return [...remote, ...local]
+      .map((item) => this.normalizeUpload(item))
+      .filter((item) => {
+        if (seen.has(item.ID)) return false;
+        seen.add(item.ID);
+        return true;
+      })
+      .sort((a, b) => Date.parse(b.EffectiveDate) - Date.parse(a.EffectiveDate));
   }
 
   private createId(): string {
